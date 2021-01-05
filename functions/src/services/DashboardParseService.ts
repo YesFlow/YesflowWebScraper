@@ -1,10 +1,10 @@
-import { chromium, Page, Frame, Browser, BrowserContext } from 'playwright';
+
 import { BehaviorSubject } from "rxjs";
 import { DashboardModel } from '../constants/dashboard.model';
 import { DashboardImage } from '../constants/dashboard-image.model';
 import { Utils } from '../utils/utils';
+import { Browser, Page, Frame, BrowserContext } from 'puppeteer';
 
-const browserType = 'chromium';
 
 
 export class DashboardParseService {
@@ -12,28 +12,17 @@ export class DashboardParseService {
     public allImagesHtmlContent: BehaviorSubject<any[]> = new BehaviorSubject<any[]>([]);
 
     public crmDashboardUrlTemplate = '';
+    public page: Page;
+    public browser: Browser;
+    public context: BrowserContext;
 
-    constructor(public page: Page) {
+    constructor(public browserInstance: Browser) {
         console.log('DashboardParseService: constructor Init');
+        this.browser = browserInstance;
     }
     
     async initPage(accessToken: string = '', dashboardId: string = '') {
         console.log('DashboardParseService: Init Page');
-    
-        // this.browser = await chromium.launch(
-        //     { 
-        //       downloadsPath: 'GetDashboardImages/downloads',
-        //       headless: false, 
-        //     //   slowMo: 50,
-        //       devtools: true, 
-        //       args: ['--disable-web-security','--disable-features=IsolateOrigins, site-per-process']},
-        // );
-        //     { 
-        //     //   downloadsPath: 'GetDashboardImages/downloads',
-        //       headless: true,
-        //       args: ['--disable-web-security','--disable-features=IsolateOrigins, site-per-process'],
-        //     },
-        // );
 
         const pagemode="iframe";
         const sitemappath = "SFA%7cMyWork%7cnav_dashboards";
@@ -42,18 +31,22 @@ export class DashboardParseService {
         this.crmDashboardUrlTemplate = `https://${crmUrl}/workplace/home_dashboards.aspx?sitemappath=`+sitemappath+`&pagemode=${pagemode}&dashboardId=`+dashboardId;    
         console.log('GetDashboardURL',this.crmDashboardUrlTemplate);
 
+        // this.context = await this.browser.defaultBrowserContext();
+        this.page =  await this.browser.newPage();
+        await this.page.setUserAgent(
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36'
+          );
+
+          
+        await this.page.setViewport({ width: 1280, height: 800 })
         if (accessToken && accessToken.length > 0) {
             const headers = {'Authorization': 'Bearer ' + accessToken};
             await this.page.setExtraHTTPHeaders(headers);
         }
-        // await this.page.goto(crmHomePage);
-        // await this.page.waitForLoadState('load');
-        await this.page.goto(this.crmDashboardUrlTemplate);
-        await this.page.waitForTimeout(7000);
-        await this.page.waitForLoadState('load');
-        console.log('Load');
-        await this.page.waitForLoadState('domcontentloaded');
-        console.log('DomContentLoaded');
+        await this.page.goto(this.crmDashboardUrlTemplate).then(()=>{ return this.page.waitForNavigation({waitUntil: 'networkidle0'})});
+        console.log('Begin Wait For VizIframes');
+        await this.waitForVizIframes();
+        console.log('End Wait For VizIframes');
     }
 
     async processDashboardImages() {
@@ -133,7 +126,7 @@ export class DashboardParseService {
         const watchdog = this.page.waitForFunction(() => {
             return document.querySelectorAll('*[id$="_vizIframe"]').length > 0;
         });
-        await watchdog;
+        return await watchdog;
     }
 
     async waitForDashboardIframes() {
@@ -144,7 +137,7 @@ export class DashboardParseService {
         let title = '';
         try {
             const pageSelect = await this.page.$('*[id$="dashboardSelectorContainer"]');
-            const titleValue = await pageSelect.getAttribute('title');
+            const titleValue = await pageSelect.getProperty('title');
             title = titleValue.toString();
             return title;
         } catch {}
@@ -202,9 +195,9 @@ export class DashboardParseService {
             const frameArray = [];
             for (const selectFrame of selectFrames) {
                 try {
-                    const frame = this.page.frame(selectFrame);
+                    const frame:Frame = this.page.frames().find(x=>x.name() === selectFrame);
                     // const frameContentHtml = await getContent(frame);
-                    await frame.waitForLoadState();
+                    await frame.waitForNavigation();
                     // await frame.$('.highcharts-container');
                     // await frame.$('svg');
                     const chartOutputPath = `GetDashboardImages/output/${Utils.GetUnqiueId()}.png`;
@@ -227,10 +220,10 @@ export class DashboardParseService {
         for (const frameName of frameNameArray) {
             console.log('DashboardParseService: GetAllChartImagesFromFrames Processing Begin', frameName);
             
-            const frameReference:Frame = this.page.frame(frameName);
+            const frameReference:Frame = this.page.frames().find(x=>x.name() === frameName);
             if (frameReference) {
                 console.log('DashboardParseService: GetAllChartImagesFromFrames WaitForFrameLoad Begin', frameName);
-                await frameReference.waitForLoadState('load');
+                await frameReference.waitForSelector('#CrmChart');
                 console.log('DashboardParseService: GetAllChartImagesFromFrames WaitForFrameLoad End', frameName);
 
                 const frameContent = await frameReference.content()
